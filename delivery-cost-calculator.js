@@ -43,9 +43,9 @@ function getDistance(loc1, loc2) {
 
 // Calculate cost for a given weight and distance
 function calculateCost(weight, distance) {
-  if (weight === 0 || distance === 0) return 0;
+  if (distance === 0) return 0;
   
-  // Base cost for any distance is 10 units per distance
+  // Base cost for any distance is 10 units per distance (even with 0 weight)
   const baseCost = 10 * distance;
   
   // Additional cost for weight over 5kg
@@ -59,14 +59,21 @@ function calculateCost(weight, distance) {
   }
 }
 
-// Calculate the cost of a specific route
-function calculateRouteCost(route, centerWeights) {
+// Calculate the cost of a specific route with detailed tracking
+function calculateRouteCost(route, centerWeights, debug = false) {
   let totalCost = 0;
   let currentWeight = 0;
   let currentLocation = route[0];
   
+  // Add detailed logging when debug is true
+  if (debug) {
+    console.log(`Starting route: ${route.join(' → ')}`);
+    console.log(`Center weights: `, centerWeights);
+  }
+  
   // Initially pick up from first center
   currentWeight += centerWeights[currentLocation] || 0;
+  if (debug) console.log(`Picked up ${centerWeights[currentLocation] || 0}kg at ${currentLocation}. Current weight: ${currentWeight}kg`);
   
   // Process each stop in the route
   for (let i = 1; i < route.length; i++) {
@@ -75,6 +82,21 @@ function calculateRouteCost(route, centerWeights) {
     
     // Calculate cost based on current weight and distance
     const segmentCost = calculateCost(currentWeight, distance);
+    
+    if (debug) {
+      console.log(`Traveling ${currentLocation} → ${nextLocation}, distance: ${distance}, weight: ${currentWeight}kg`);
+      
+      if (currentWeight > 5) {
+        const additionalWeight = currentWeight - 5;
+        const additionalBlocks = Math.ceil(additionalWeight / 5);
+        console.log(`  Base cost: 10 × ${distance} = ${10 * distance}`);
+        console.log(`  Additional cost: ceil((${currentWeight} - 5) / 5) × 8 × ${distance} = ${additionalBlocks} × 8 × ${distance} = ${additionalBlocks * 8 * distance}`);
+        console.log(`  Segment cost: ${segmentCost}`);
+      } else {
+        console.log(`  Segment cost: 10 × ${distance} = ${segmentCost}`);
+      }
+    }
+    
     totalCost += segmentCost;
     
     // Update location
@@ -82,62 +104,79 @@ function calculateRouteCost(route, centerWeights) {
     
     // If we're at L1, drop off all products
     if (currentLocation === 'L1') {
+      if (debug) console.log(`Arrived at L1, dropping off all products. Weight reset to 0kg`);
       currentWeight = 0;
     } 
     // If we're at a center, pick up products
     else {
-      currentWeight += centerWeights[currentLocation] || 0;
+      const newWeight = centerWeights[currentLocation] || 0;
+      currentWeight += newWeight;
+      if (debug) console.log(`Picked up ${newWeight}kg at ${currentLocation}. Current weight: ${currentWeight}kg`);
     }
   }
+  
+  if (debug) console.log(`Total route cost: ${Math.round(totalCost)}`);
   
   return Math.round(totalCost);
 }
 
-// Generate all possible routes for a given set of centers
+// Generate all permutations of centers
+function permute(arr) {
+  if (arr.length <= 1) return [arr];
+  
+  const result = [];
+  for (let i = 0; i < arr.length; i++) {
+    const current = arr[i];
+    const remaining = [...arr.slice(0, i), ...arr.slice(i + 1)];
+    const permutations = permute(remaining);
+    
+    for (const perm of permutations) {
+      result.push([current, ...perm]);
+    }
+  }
+  
+  return result;
+}
+
+// Generate all possible routes considering L1 insertions
 function generateAllPossibleRoutes(centers) {
+  // Get all permutations of centers
+  const centerPermutations = permute(centers);
+  
   const allRoutes = [];
   
-  // Function to generate all possible arrangements of centers with L1 insertions
-  function generateRoutes(remainingCenters, currentRoute, currentLocation) {
-    // If we've visited all centers, add final L1 if needed and add to routes
-    if (remainingCenters.length === 0) {
-      const finalRoute = [...currentRoute];
-      if (currentLocation !== 'L1') {
-        finalRoute.push('L1');
-      }
-      allRoutes.push(finalRoute);
-      return;
-    }
+  // For each permutation, generate all possible L1 insertion patterns
+  centerPermutations.forEach(centerOrder => {
+    // Generate all possible patterns of L1 insertions
+    const n = centerOrder.length;
+    // 2^(n-1) possible L1 insertion patterns (excluding before first center)
+    const possiblePatterns = 1 << (n - 1);
     
-    // Try each remaining center as the next stop
-    for (let i = 0; i < remainingCenters.length; i++) {
-      const nextCenter = remainingCenters[i];
-      const newRemaining = [...remainingCenters.slice(0, i), ...remainingCenters.slice(i + 1)];
+    for (let pattern = 0; pattern < possiblePatterns; pattern++) {
+      const route = [centerOrder[0]]; // Start with first center
       
-      // Option 1: Go directly to the next center
-      generateRoutes(newRemaining, [...currentRoute, nextCenter], nextCenter);
-      
-      // Option 2: Go to L1 first, then to the next center
-      if (currentLocation !== 'L1') {
-        generateRoutes(newRemaining, [...currentRoute, 'L1', nextCenter], nextCenter);
+      for (let i = 1; i < n; i++) {
+        // Check if we should insert L1 before this center
+        if ((pattern & (1 << (i - 1))) !== 0) {
+          route.push('L1');
+        }
+        route.push(centerOrder[i]);
       }
+      
+      // Always end at L1
+      if (route[route.length - 1] !== 'L1') {
+        route.push('L1');
+      }
+      
+      allRoutes.push(route);
     }
-  }
-  
-  // Try each center as starting point
-  for (let i = 0; i < centers.length; i++) {
-    const startCenter = centers[i];
-    const remainingCenters = [...centers.slice(0, i), ...centers.slice(i + 1)];
-    
-    // Start from this center
-    generateRoutes(remainingCenters, [startCenter], startCenter);
-  }
+  });
   
   return allRoutes;
 }
 
 // Main function to calculate minimum delivery cost
-function findMinimumCost(order) {
+function findMinimumCost(order, debug = false) {
   // Calculate weight from each center
   const centerWeights = { 'C1': 0, 'C2': 0, 'C3': 0 };
   const requiredCenters = new Set();
@@ -151,6 +190,15 @@ function findMinimumCost(order) {
     }
   }
   
+  if (debug) {
+    console.log("Order details:");
+    console.log(order);
+    console.log("Center weights:");
+    console.log(centerWeights);
+    console.log("Required centers:");
+    console.log(Array.from(requiredCenters));
+  }
+  
   // If no products are ordered, return 0
   if (requiredCenters.size === 0) return { minimumCost: 0, bestRoute: [] };
   
@@ -159,32 +207,62 @@ function findMinimumCost(order) {
   // For single center, direct route is optimal
   if (centers.length === 1) {
     const center = centers[0];
-    const cost = calculateCost(centerWeights[center], getDistance(center, 'L1'));
+    const route = [center, 'L1'];
+    const cost = calculateRouteCost(route, centerWeights, debug);
+    
+    if (debug) {
+      console.log(`Single center ${center}, direct route is optimal`);
+      console.log(`Route: ${route.join(' → ')}, Cost: ${cost}`);
+    }
+    
     return {
-      minimumCost: Math.round(cost),
-      bestRoute: [center, 'L1']
+      minimumCost: cost,
+      bestRoute: route
     };
   }
   
   // Generate all possible routes
   const allRoutes = generateAllPossibleRoutes(centers);
   
+  if (debug) {
+    console.log(`Generated ${allRoutes.length} possible routes`);
+  }
+  
   // Find the minimum cost route
   let minCost = Infinity;
   let bestRoute = null;
   
   for (const route of allRoutes) {
-    const cost = calculateRouteCost(route, centerWeights);
+    const cost = calculateRouteCost(route, centerWeights, debug);
+    
+    if (debug) {
+      console.log(`Route: ${route.join(' → ')}, Cost: ${cost}`);
+    }
+    
     if (cost < minCost) {
       minCost = cost;
       bestRoute = route;
     }
   }
   
+  if (debug) {
+    console.log(`Best route found: ${bestRoute.join(' → ')}, Cost: ${minCost}`);
+  }
+  
   return {
     minimumCost: minCost,
     bestRoute: bestRoute
   };
+}
+
+// Test specific cases
+function runTestCase(description, order, expectedCost) {
+  console.log(`\n=== Test Case: ${description} ===`);
+  const result = findMinimumCost(order, true);
+  console.log(`Result: ${result.minimumCost}, Expected: ${expectedCost}`);
+  console.log(`Best route: ${result.bestRoute.join(' → ')}`);
+  console.log(`Test ${result.minimumCost === expectedCost ? 'PASSED' : 'FAILED'}`);
+  return result;
 }
 
 // API endpoint
